@@ -29,14 +29,16 @@ def load_env_vars_from_file():
         raise Exception(f'Failed to load environment variables from file:\n{path_to_environment_file}')
 
 
-def run_main():
+def run_main(access_token: str):
 
     import main
-    response = main.do()
+    response = main.do(access_token)
     print('Response is:')
     print(pformat(response))
 
 
 if __name__ == '__main__':
+    access_token = None  # Paste access token here to test
+
     load_env_vars_from_file()
-    run_main()
+    run_main(access_token)
