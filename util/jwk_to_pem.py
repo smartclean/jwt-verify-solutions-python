@@ -12,8 +12,7 @@ from cryptography.hazmat.primitives.asymmetric.rsa import RSAPublicNumbers
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives import serialization
 
-
-import util.type_check
+from util import data_ops
 
 # TODO: Test against all possible exceptions and handle them...
 
@@ -34,7 +33,7 @@ def convert(jwk_object: dict) -> dict:
     print('Converting JWK object to RSA Public Key')
 
     # region Extract and validate "e" (exponent) from JWK object
-    get_exponent_response = util.type_check.extract_attr_from_dictionary(
+    get_exponent_response = data_ops.extract_attr_from_dictionary(
         data=jwk_object,
         data_name='jwk object',
         attr_name='e',
@@ -60,7 +59,7 @@ def convert(jwk_object: dict) -> dict:
     # endregion
 
     # region Extract and validate "n" (modulus) from JWK object
-    get_modulus_response = util.type_check.extract_attr_from_dictionary(
+    get_modulus_response = data_ops.extract_attr_from_dictionary(
         data=jwk_object,
         data_name='jwk object',
         attr_name='n',
