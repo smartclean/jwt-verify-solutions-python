@@ -1,15 +1,17 @@
-import os
-import base64
+from os import getenv
+from base64 import b64decode
 import json
 import time
 
-from util.logging import get_logger_for_module
 from util import data_ops
+from util.logging import get_logger_for_module
+from util.jwk_to_pem import convert_to_rsa_public_key
 from api.amazon_cognito import get_jwks_json_for_user_pool
 
-from pprint import pformat
+import jwt
 
-_LOG_LEVEL = os.getenv('LOG_LEVEL', 'info')
+
+_LOG_LEVEL = getenv('LOG_LEVEL', 'info')
 LOG = get_logger_for_module(__name__, _LOG_LEVEL)
 
 
@@ -20,7 +22,6 @@ def do(jwt_access_token: str) -> dict:
     response_data = {
         'code': None,
         'data': None,
-        'success': False,
         'message': 'default'
     }
 
@@ -100,7 +101,7 @@ def do(jwt_access_token: str) -> dict:
     LOG.debug(deserialize_token_header_message)
     # endregion
 
-    # region Get kid from token header data
+    # region 6(a). Get kid from token header data
     _get_kid_resp = data_ops.extract_attr_from_dictionary(
         token_header_data,
         'token header data',
@@ -116,7 +117,7 @@ def do(jwt_access_token: str) -> dict:
         return response_data
     # endregion
 
-    # region Get alg from token header data
+    # region 6(b). Get alg from token header data
     _get_alg_resp = data_ops.extract_attr_from_dictionary(
         token_header_data,
         'token_header_data',
@@ -133,7 +134,7 @@ def do(jwt_access_token: str) -> dict:
 
     # endregion
 
-    # region 6. Fetch well known JWKS for desired AWS Cognito User Pool
+    # region 7. Fetch well known JWKS for desired AWS Cognito User Pool
     jwks_data_source_name = 'well known JWKS for desired AWS Cognito User Pool'
 
     request_name_get_jwks = f'Get {jwks_data_source_name}'
@@ -151,7 +152,7 @@ def do(jwt_access_token: str) -> dict:
     LOG.debug(get_jwks_message)
     # endregion
 
-    # region Extract "keys" (JWK objects) from JWKS data
+    # region 8. Extract "keys" (JWK objects) from JWKS data
     get_jwk_objects_resp = data_ops.extract_attr_from_dictionary(
         data=jwks_data,
         data_name=jwks_data_source_name,
@@ -170,9 +171,7 @@ def do(jwt_access_token: str) -> dict:
     LOG.debug(get_jwk_objects_status)
     # endregion
 
-    # perform matching process i.e. check whether local kid found in the JWK objects
-
-    # region Get JWK object matching local "kid" and "alg"
+    # region 9. Get JWK object matching local "kid" and "alg"
     _get_jwk_object_matching_kid_response = _get_jwk_object_matching_kid(local_kid, local_key_alg, jwk_objects)
     matching_jwk_object = _get_jwk_object_matching_kid_response['data']
     _get_jwk_object_matching_kid_message = _get_jwk_object_matching_kid_response['message']
@@ -185,13 +184,43 @@ def do(jwt_access_token: str) -> dict:
     LOG.info(_get_jwk_object_matching_kid_message)
     # endregion
 
+    # region 10. Convert JWK object to PEM
+    _convert_to_rsa_public_key_response = convert_to_rsa_public_key(matching_jwk_object)
+
+    rsa_public_key = _convert_to_rsa_public_key_response['value']
+    _convert_to_rsa_public_key_message = _convert_to_rsa_public_key_response['message']
+
+    if rsa_public_key is None:
+        response_data['code'] = 'INVALID_JWK'
+        response_data['message'] = f'Convert JWK to Public Key failed ({_convert_to_rsa_public_key_message})'
+        return response_data
+    LOG.debug(_convert_to_rsa_public_key_message)
+    # endregion
+
+    # region Verify token with Public Key and Token Payload
+    _verify_jwt_response = verify_jwt_using_public_key(
+        jwt_access_token,
+        token_payload_data,
+        local_key_alg,
+        rsa_public_key
+    )
+
+    verify_success = _verify_jwt_response['status']
+    _verify_jwt_message = _verify_jwt_response['message']
+
+    if verify_success is False:
+        response_data['code'] = 'JWT_VERIFICATION_FAILED'
+        response_data['message'] = _verify_jwt_message
+        return response_data
+    # endregion
+
     # TODO: Next tasks for Dev
-    #  Convert this JWK object to PEM (use tested util)
-    #  Use this PEM public key to decode and verify the JWT token with its Payload
     #  Code cleanup (remove all unwanted functions and move utils to where they belong)
 
-    response_data['code'] = 'WORK_IN_PROGRESS'
-    response_data['message'] = 'Developer is still working on the entire process'
+    response_data['code'] = 'SUCCESS'
+    if response_data['data'] is None:
+        response_data.pop('data')
+    response_data['message'] = 'JWT verification successful'
 
     return response_data
 
@@ -206,7 +235,7 @@ def _deserialize_base64_encoded_token_section(base64_encoded_token_section: str,
 
     # region Decode section using base64 (fail if invalid base64 string)
     try:
-        _b64_decoded_token_section_json_bytes = base64.b64decode(base64_encoded_token_section)
+        _b64_decoded_token_section_json_bytes = b64decode(base64_encoded_token_section)
     except Exception as err:
         _err_type = type(err).__name__
         _err_text = str(err)
@@ -266,7 +295,6 @@ def _check_token_expired(token_payload_data: dict, current_unix_time_seconds: in
     payload_attr_expiry = 'exp'
     data_name = 'token payload data'
 
-
     # region Get "exp" (expiry unix time seconds) from token payload data
     _get_exp_resp = data_ops.extract_attr_from_dictionary(
         data=token_payload_data,
@@ -311,7 +339,6 @@ def _check_token_use_claim_matches_desired_value(token_payload_data: dict, desir
     payload_attr_token_use = 'token_use'
     data_name = 'token payload data'
 
-
     # region Get "token_use" from token payload data
     _get_token_use_resp = data_ops.extract_attr_from_dictionary(
         data=token_payload_data,
@@ -340,372 +367,17 @@ def _check_token_use_claim_matches_desired_value(token_payload_data: dict, desir
     return response_data
 
 
-def check_jwt_valid(access_token: str) -> dict:
+def verify_jwt_using_public_key(jwt_token: str, decoded_token_payload: dict, algorithm: str, public_key: str):
 
     response_data = {
         'status': False,
-        'code': 'TOKEN_INVALID',
-        'error': 'False',
         'message': 'default'
     }
 
-    # region Check structure valid
-    _check_structure_resp = _check_jwt_token_structure_valid(access_token)
-    structure_valid = _check_structure_resp['status']
-    check_structure_message = _check_structure_resp['message']
-    # process_step_number = _check_structure_resp['jwtVerifyStepNumber']
-
-    if structure_valid is False:
-        response_data['message'] = f'Step 1 failed. {check_structure_message}'
-        return response_data
-    # endregion
-
-    token_sections_by_name = _check_structure_resp['token_sections_by_name']
-
-    token_header = token_sections_by_name['header']
-
-    # region Decode token header
-    _decoded_token_header_bytes = base64.b64decode(token_header)
-    _decoded_token_header_data_json_string = _decoded_token_header_bytes.decode('utf-8')
-    decoded_token_header_data = json.loads(_decoded_token_header_data_json_string)
-    # endregion
-
-    # region Get kid from decoded token header data
-    _get_kid_resp = data_ops.extract_attr_from_dictionary(
-        decoded_token_header_data,
-        'decoded jwt header',
-        'kid',
-        str
-    )
-
-    local_kid = _get_kid_resp['value']
-    get_kid_text = _get_kid_resp['text']
-
-    if local_kid is None:
-        response_data['message'] = get_kid_text
-        return response_data
-    # endregion
-
-    # region Get alg from decoded token header data
-    _get_alg_resp = data_ops.extract_attr_from_dictionary(
-        decoded_token_header_data,
-        'decoded jwt header',
-        'alg',
-        str
-    )
-
-    local_key_alg = _get_alg_resp['value']
-    get_alg_text = _get_alg_resp['text']
-
-    if local_key_alg is None:
-        response_data['message'] = get_alg_text
-        return response_data
-
-    # endregion
-
-    token_payload = token_sections_by_name['payload']
-
-    # region Decode token payload
-    _decoded_token_payload_bytes = base64.b64decode(token_payload)
-    _decoded_token_payload_data_json_string = _decoded_token_payload_bytes.decode('utf-8')
-    decoded_token_payload_data = json.loads(_decoded_token_payload_data_json_string)
-    # endregion
-
-    # region Get exp from decoded token payload data
-    _get_exp_resp = data_ops.extract_attr_from_dictionary(
-        decoded_token_payload_data,
-        'decoded jwt payload',
-        'exp',
-        int
-    )
-
-    token_exp = _get_exp_resp['value']
-    get_exp_text = _get_exp_resp['text']
-
-    if token_exp is None:
-        response_data['message'] = get_exp_text
-        return response_data
-
-    # endregion
-
-    curr_unix_time = int(time.time())
-
-    if token_exp < curr_unix_time:
-        response_data['message'] = 'Given token has already expired'
-        return response_data
-
-    # region Get iat from decoded token payload data
-    _get_iat_resp = data_ops.extract_attr_from_dictionary(
-        decoded_token_payload_data,
-        'decoded jwt payload',
-        'iat',
-        int
-    )
-
-    token_iat = _get_iat_resp['value']
-    get_iat_text = _get_iat_resp['text']
-
-    if token_iat is None:
-        response_data['message'] = get_iat_text
-        return response_data
-
-    # endregion
-
-    if token_iat > curr_unix_time:
-        response_data['message'] = f'UNEXPECTED: iat in token payload is greater than current unix time'
-        return response_data
-
-    # region Get token_use from decoded token payload data
-    _get_token_use_resp = data_ops.extract_attr_from_dictionary(
-        decoded_token_payload_data,
-        'decoded jwt payload',
-        'token_use',
-        str
-    )
-
-    token_use = _get_token_use_resp['value']
-    get_token_use_text = _get_token_use_resp['text']
-
-    if token_use is None:
-        response_data['message'] = get_token_use_text
-        return response_data
-
-    # endregion
-
-    if token_use != 'access':
-        response_data['message'] = f'token_use in decoded token payload is: {token_use} (Required: "access")'
-        return response_data
-
-    # region Get client_id from decoded token payload data
-    _get_client_id_resp = data_ops.extract_attr_from_dictionary(
-        decoded_token_payload_data,
-        'decoded jwt payload',
-        'client_id',
-        str
-    )
-
-    token_client_id = _get_client_id_resp['value']
-    get_client_id_text = _get_client_id_resp['text']
-
-    if token_client_id is None:
-        response_data['message'] = get_client_id_text
-        return response_data
-
-    # endregion
-
-    # TODO: Require client id to verify with token client id...
-
-    # region Get scope from decoded token payload data
-    _get_scope_resp = data_ops.extract_attr_from_dictionary(
-        decoded_token_payload_data,
-        'decoded jwt payload',
-        'scope',
-        str
-    )
-
-    token_scope = _get_scope_resp['value']
-    get_scope_text = _get_scope_resp['text']
-
-    if token_scope is None:
-        response_data['message'] = get_scope_text
-        return response_data
-
-    # endregion
-
-    # Decode and verify JWT
-
-    response_data['message'] = 'JWT token is invalid (signature matching failed)'
-    return response_data
-
-
-def check_jwt_valid_v2(access_token: str, exp_client_id: str, exp_scope: str) -> dict:
-    """
-
-    :param access_token: JWT access token
-    :param exp_client_id: Expected client id
-    :param exp_scope: Expected scope for the token (desired operation)
-    :return:
-    """
-
-    response_data = {
-        'status': False,
-        'code': 'TOKEN_INVALID',
-        'error': 'False',
-        'message': 'default'
-    }
-
-    # region Check structure valid
-    _check_structure_resp = _check_jwt_token_structure_valid(access_token)
-    structure_valid = _check_structure_resp['status']
-    check_structure_message = _check_structure_resp['message']
-    # process_step_number = _check_structure_resp['jwtVerifyStepNumber']
-
-    if structure_valid is False:
-        response_data['message'] = f'Step 1 failed. {check_structure_message}'
-        return response_data
-    # endregion
-
-    token_sections_by_name = _check_structure_resp['token_sections_by_name']
-
-    token_header = token_sections_by_name['header']
-
-    # region Decode token header
-    _decoded_token_header_bytes = base64.b64decode(token_header)
-    _decoded_token_header_data_json_string = _decoded_token_header_bytes.decode('utf-8')
-    decoded_token_header_data = json.loads(_decoded_token_header_data_json_string)
-    # endregion
-
-    # region Get kid from decoded token header data
-    _get_kid_resp = data_ops.extract_attr_from_dictionary(
-        decoded_token_header_data,
-        'decoded jwt header',
-        'kid',
-        str
-    )
-
-    local_kid = _get_kid_resp['value']
-    get_kid_text = _get_kid_resp['text']
-
-    if local_kid is None:
-        response_data['message'] = get_kid_text
-        return response_data
-    # endregion
-
-    # region Get alg from decoded token header data
-    _get_alg_resp = data_ops.extract_attr_from_dictionary(
-        decoded_token_header_data,
-        'decoded jwt header',
-        'alg',
-        str
-    )
-
-    local_key_alg = _get_alg_resp['value']
-    get_alg_text = _get_alg_resp['text']
-
-    if local_key_alg is None:
-        response_data['message'] = get_alg_text
-        return response_data
-
-    # endregion
-
-    token_payload = token_sections_by_name['payload']
-
-    # region Decode token payload
-    _decoded_token_payload_bytes = base64.b64decode(token_payload)
-    _decoded_token_payload_data_json_string = _decoded_token_payload_bytes.decode('utf-8')
-    decoded_token_payload_data = json.loads(_decoded_token_payload_data_json_string)
-    # endregion
-
-    # region Get exp from decoded token payload data
-    _get_exp_resp = data_ops.extract_attr_from_dictionary(
-        decoded_token_payload_data,
-        'decoded jwt payload',
-        'exp',
-        int
-    )
-
-    token_exp = _get_exp_resp['value']
-    get_exp_text = _get_exp_resp['text']
-
-    if token_exp is None:
-        response_data['message'] = get_exp_text
-        return response_data
-
-    # endregion
-
-    curr_unix_time = int(time.time())
-
-    if token_exp < curr_unix_time:
-        response_data['message'] = 'Given token has already expired'
-        return response_data
-
-    # region Get token_use from decoded token payload data
-    _get_token_use_resp = data_ops.extract_attr_from_dictionary(
-        decoded_token_payload_data,
-        'decoded jwt payload',
-        'token_use',
-        str
-    )
-
-    token_use = _get_token_use_resp['value']
-    get_token_use_text = _get_token_use_resp['text']
-
-    if token_use is None:
-        response_data['message'] = get_token_use_text
-        return response_data
-
-    # endregion
-
-    if token_use != 'access':
-        response_data['message'] = f'token_use in decoded token payload is: {token_use} (Required: "access")'
-        return response_data
-
-    # region Get iat from decoded token payload data
-    _get_iat_resp = data_ops.extract_attr_from_dictionary(
-        decoded_token_payload_data,
-        'decoded jwt payload',
-        'iat',
-        int
-    )
-
-    token_iat = _get_iat_resp['value']
-    get_iat_text = _get_iat_resp['text']
-
-    if token_iat is None:
-        response_data['message'] = get_iat_text
-        return response_data
-
-    # endregion
-
-    if token_iat > curr_unix_time:
-        response_data['message'] = f'UNEXPECTED: iat in token payload is greater than current unix time'
-        return response_data
-
-    # region Get client_id from decoded token payload data
-    _get_client_id_resp = data_ops.extract_attr_from_dictionary(
-        decoded_token_payload_data,
-        'decoded jwt payload',
-        'client_id',
-        str
-    )
-
-    token_client_id = _get_client_id_resp['value']
-    get_client_id_text = _get_client_id_resp['text']
-
-    if token_client_id is None:
-        response_data['message'] = get_client_id_text
-        return response_data
-
-    # endregion
-
-    # TODO: Require client id to verify with token client id...
-
-    # region Get scope from decoded token payload data
-    _get_scope_resp = data_ops.extract_attr_from_dictionary(
-        decoded_token_payload_data,
-        'decoded jwt payload',
-        'scope',
-        str
-    )
-
-    token_scope = _get_scope_resp['value']
-    get_scope_text = _get_scope_resp['text']
-
-    if token_scope is None:
-        response_data['message'] = get_scope_text
-        return response_data
-
-    # endregion
-
-    # Decode and verify JWT
-
-    response_data['message'] = 'JWT token is invalid (signature matching failed)'
-    return response_data
-
-
-def _decode_and_verify_jwt(jwt_token: str, decoded_token_payload: dict, algorithm: str, public_key: str):
-
-    decode_jwt_response = _decode_jwt(token=jwt_token, public_key=token_public_key, alg=local_key_alg)
+    decode_jwt_response = _decode_jwt(
+        token=jwt_token,
+        public_key=public_key,
+        alg=algorithm)
 
     decoded_jwt_data = decode_jwt_response['data']
     decoded_jwt_message = decode_jwt_response['message']
@@ -714,13 +386,15 @@ def _decode_and_verify_jwt(jwt_token: str, decoded_token_payload: dict, algorith
         response_data['message'] = f'Failed to decode JWT token ({decoded_jwt_message})'
         return response_data
 
-    # Match decoded jwt data with payload
+    LOG.debug(decoded_jwt_message)
 
-    if decoded_jwt_data == decoded_token_payload_data:
+    if decoded_jwt_data == decoded_token_payload:
         response_data['status'] = True
-        response_data['code'] = 'SUCCESS'
-        response_data['message'] = 'JWT token is valid'
+        response_data['message'] = 'JWT successfully verified using public key'
         return response_data
+
+    response_data['message'] = 'JWT decoded using given public key did not match the given token payload'
+    return response_data
 
 
 def _check_jwt_token_structure_valid(jwt_token: str) -> dict:
@@ -767,7 +441,7 @@ def _get_jwk_object_matching_kid(local_kid: str, local_alg: str, public_jwk_obje
 
     :param local_kid:
     :param local_alg:
-    :param jwk_objects:
+    :param public_jwk_objects:
     :return:
     """
 
@@ -887,30 +561,22 @@ def _get_jwk_object_matching_kid(local_kid: str, local_alg: str, public_jwk_obje
     return response_data
 
 
-# OBSOLETE:
-def _get_keys_data_from_file():
-    # region Get keys data from the public jwt keys json file
-    # _file_data_name = 'public jwt keys json file'
-    #
-    # get_data_response = _get_data_from_jwt_keys_json_file(json_filepath_jwt_keys)
-    # json_file_data = get_data_response['data']
-    # get_json_file_message = get_data_response['message']
-    #
-    # if not json_file_data:
-    #     response_data['message'] = f'Failed to get data from {_file_data_name} ({get_json_file_message})'
-    #     return response_data
-    #
-    # if 'keys' not in json_file_data:
-    #     response_data['message'] = f'Required attribute: "keys" missing in {_file_data_name}'
-    #     return response_data
-    # endregion
+def _decode_jwt(token: str, public_key: str, alg: str) -> dict:
 
-    # jwk_objects = json_file_data['keys']
+    response_data = {
+        'data': None,
+        'message': 'default'
+    }
 
-    # region Ensure keys in data is list
-    _type_keys_data = type(jwk_objects)
-
-    if _type_keys_data is not list:
-        response_data['message'] = f'"keys" in {_file_data_name} must be list (but found: {_type_keys_data.__name__}'
+    try:
+        response = jwt.decode(token, public_key, algorithms=[alg])
+    except Exception as err:
+        _err_type = type(err).__name__
+        _err_text = str(err)
+        err_info = f'{_err_type} decoding using JWT ({_err_text})'
+        response_data['message'] = err_info
         return response_data
-    # endregion
+
+    response_data['data'] = response
+    response_data['message'] = 'Decoded using JWT and given key and algorithm'
+    return response_data
