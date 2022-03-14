@@ -1,4 +1,4 @@
-from util.jwk_to_pem import convert
+from util.jwk_to_pem import convert_to_rsa_public_key
 from util.test import jwk_pem_data
 
 # TODO: Add tests for logging and type_check modules
@@ -25,7 +25,7 @@ def run_test():
 
 def test_convert_jwk_to_pem(jwk_object: dict, valid: bool, rsa_public_key: str = None):
 
-    get_public_key_resp = convert(jwk_object)
+    get_public_key_resp = convert_to_rsa_public_key(jwk_object)
 
     public_key = get_public_key_resp['value']
     get_public_key_message = get_public_key_resp['message']

@@ -17,7 +17,7 @@ from util import data_ops
 # TODO: Test against all possible exceptions and handle them...
 
 
-def convert(jwk_object: dict) -> dict:
+def convert_to_rsa_public_key(jwk_object: dict) -> dict:
     """
     Converts given JWK object to an RSA Public Key
 
