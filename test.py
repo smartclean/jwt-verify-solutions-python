@@ -10,7 +10,7 @@ _LOG_LEVEL = os.getenv('LOG_LEVEL', 'debug')
 LOG = get_logger_for_module(__name__, _LOG_LEVEL)
 
 
-def test_main(access_token: str):
+def test_main(access_token: str, scope: str = None):
 
     LOG.debug('Starting test for main.py')
     _load_env_vars_from_file()
@@ -52,6 +52,13 @@ if __name__ == '__main__':
     access_token = input('Please paste the JWT access token and hit enter...')
 
     if access_token == '':
-        print('No input given!', file=sys.stderr)
+        print('No access token given!', file=sys.stderr)
 
-    test_main(access_token)
+    scope = input('Please enter the scope (optional) and hit enter. Just hit enter to omit scope check.')
+
+    if scope == '':
+        print('Scope not given. scope verification will be omitted')
+        test_main(access_token)
+    else:
+        test_main(access_token, scope)
+
