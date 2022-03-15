@@ -16,7 +16,7 @@ def test_main(access_token: str, scope: str = None):
     _load_env_vars_from_file()
 
     import main
-    response = main.verify_signed_access_token(access_token, 'null')
+    response = main.verify_signed_access_token(access_token, scope)
     LOG.info(f'Test complete, Response is:\n{pformat(response)}')
 
 
