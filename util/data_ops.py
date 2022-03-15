@@ -1,4 +1,4 @@
-from _util.type_check import (
+from util.type_check import (
     check_list_is_valid,
     check_dict_is_valid,
     check_string_is_valid,

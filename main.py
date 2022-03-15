@@ -6,7 +6,7 @@ from base64 import b64decode
 import jwt
 
 from util import data_ops
-from util.logging import get_logger_for_module
+from util.logger import get_logger_for_module
 from util.jwk_to_pem import convert_to_rsa_public_key
 from api.jwt_issuer import fetch_well_known_jwks_from_token_issuer
 
