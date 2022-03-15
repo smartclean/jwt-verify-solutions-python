@@ -28,7 +28,6 @@ def verify_signed_access_token(token: str, scope: str = None) -> dict:
 
     response_data = {
         'code': None,
-        'data': None,
         'message': 'default'
     }
 
@@ -38,6 +37,7 @@ def verify_signed_access_token(token: str, scope: str = None) -> dict:
     check_structure_message = _check_structure_resp['message']
 
     if structure_valid is False:
+        response_data['code'] = 'JWT_STRUCTURE_INVALID'
         response_data['message'] = f'Step 1 failed. {check_structure_message}'
         return response_data
 
@@ -108,6 +108,7 @@ def verify_signed_access_token(token: str, scope: str = None) -> dict:
     get_kid_text = _get_kid_resp['text']
 
     if local_kid is None:
+        response_data['code'] = 'TOKEN_HEADER_ATTRIBUTE_MISSING'
         response_data['message'] = get_kid_text
         return response_data
     # endregion
@@ -124,6 +125,7 @@ def verify_signed_access_token(token: str, scope: str = None) -> dict:
     get_alg_text = _get_alg_resp['text']
 
     if local_key_alg is None:
+        response_data['code'] = 'TOKEN_HEADER_ATTRIBUTE_MISSING'
         response_data['message'] = get_alg_text
         return response_data
 
