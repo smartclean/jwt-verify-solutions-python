@@ -1,20 +1,37 @@
 import os
+import sys
 from pprint import pformat
 from dotenv import load_dotenv
 
 import definitions
+from util.logging import get_logger_for_module
+
+_LOG_LEVEL = os.getenv('LOG_LEVEL', 'debug')
+LOG = get_logger_for_module(__name__, _LOG_LEVEL)
 
 
-def load_env_vars_from_file():
+def test_main(access_token: str):
+
+    LOG.debug('Starting test for main.py')
+    _load_env_vars_from_file()
+
+    import main
+    response = main.verify_signed_access_token(access_token, 'null')
+    LOG.info(f'Test complete, Response is:\n{pformat(response)}')
+
+
+def _load_env_vars_from_file():
+
+    LOG.debug('Loading env vars from file...')
 
     _absolute_path_project_directory = os.path.dirname(os.path.abspath(__name__))
-    print(f'Absolute path to Project directory is:\n{_absolute_path_project_directory}')
+    LOG.debug(f'Absolute path to Project directory is:\n{_absolute_path_project_directory}')
 
     _project_relative_path_to_env_file = definitions.PROJECT_RELATIVE_PATH_TO_ENVIRONMENT_FILE
-    print(f'definition: PROJECT_RELATIVE_PATH_TO_ENVIRONMENT_FILE is:\n{_project_relative_path_to_env_file}')
+    LOG.debug(f'definition: PROJECT_RELATIVE_PATH_TO_ENVIRONMENT_FILE is: {_project_relative_path_to_env_file}')
 
     path_to_environment_file = f'{_absolute_path_project_directory}/{_project_relative_path_to_env_file}'
-    print(f'Loading environment variables from file:\n{path_to_environment_file}')
+    LOG.debug(f'Absolute path to environment file is:\n{path_to_environment_file}')
 
     if os.path.isfile(path_to_environment_file) is False:
         raise FileNotFoundError(f'Tip: Please create the file or update the definition: '
@@ -24,21 +41,17 @@ def load_env_vars_from_file():
     load_response = load_dotenv(path_to_environment_file)
 
     if load_response is True:
-        print(f'Successfully loaded environment variables from file:\n{path_to_environment_file}')
+        LOG.info(f'Successfully loaded environment variables from file:\n{path_to_environment_file}')
     else:
         raise Exception(f'Failed to load environment variables from file:\n{path_to_environment_file}')
 
 
-def run_main(access_token: str):
-
-    import main
-    response = main.do(access_token)
-    print('Response is:')
-    print(pformat(response))
-
-
 if __name__ == '__main__':
-    access_token = None  # Paste access token here to test
+    print('Received command to run test.py\n')
 
-    load_env_vars_from_file()
-    run_main(access_token)
+    access_token = input('Please paste the JWT access token and hit enter...')
+
+    if access_token == '':
+        print('No input given!', file=sys.stderr)
+
+    test_main(access_token)

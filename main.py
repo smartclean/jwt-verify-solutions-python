@@ -1,21 +1,28 @@
+import time
+import json
 from os import getenv
 from base64 import b64decode
-import json
-import time
+
+import jwt
 
 from util import data_ops
 from util.logging import get_logger_for_module
 from util.jwk_to_pem import convert_to_rsa_public_key
-from api.amazon_cognito import get_jwks_json_for_user_pool
-
-import jwt
+from api.jwt_issuer import fetch_well_known_jwks_from_token_issuer
 
 
 _LOG_LEVEL = getenv('LOG_LEVEL', 'info')
 LOG = get_logger_for_module(__name__, _LOG_LEVEL)
 
 
-def do(jwt_access_token: str) -> dict:
+def verify_signed_access_token(token: str, scope: str = None) -> dict:
+    """
+    Verify the given signed JWT access token JWS token
+
+    :param token:
+    :param scope:
+    :return:
+    """
 
     LOG.debug('Starting Process...')
 
@@ -26,7 +33,7 @@ def do(jwt_access_token: str) -> dict:
     }
 
     # region 1. Ensure structure of JWT token valid, extract token sections
-    _check_structure_resp = _check_jwt_token_structure_valid(jwt_access_token)
+    _check_structure_resp = _check_jwt_token_structure_valid(token)
     structure_valid = _check_structure_resp['status']
     check_structure_message = _check_structure_resp['message']
 
@@ -55,38 +62,26 @@ def do(jwt_access_token: str) -> dict:
     LOG.debug(deserialize_token_payload_message)
     # endregion
 
-    current_unix_time_seconds = int(time.time())
-
-    # region 3. Ensure token is not already expired (using payload data)
-    _check_token_expired_resp = _check_token_expired(token_payload_data, current_unix_time_seconds)
-    token_expired = _check_token_expired_resp['status']
-    check_token_expired_message = _check_token_expired_resp['message']
-
-    if token_expired is True:
-        response_data['code'] = 'TOKEN_EXPIRED'
-        response_data['message'] = check_token_expired_message
-        return response_data
-
-    LOG.debug(check_token_expired_message)
-    # endregion
-
-    # region 4. Ensure token_use claim matches desired value (using payload data)
-    _check_token_use_correct = _check_token_use_claim_matches_desired_value(
+    # region 3. Verify token payload claims
+    _verify_token_payload_claims_response = _verify_token_payload_claims(
         token_payload_data,
-        desired_value='access'
+        exp_token_use='access',
+        exp_scope=scope
     )
-    token_use_correct = _check_token_use_correct['status']
-    check_token_use_correct_message = _check_token_use_correct['message']
 
-    if token_use_correct is False:
-        response_data['code'] = 'JWT_TOKEN_USE_CLAIM_INCORRECT'
-        response_data['message'] = check_token_use_correct_message
+    token_payload_claims_correct = _verify_token_payload_claims_response['status']
+    _verify_token_payload_claims_message = _verify_token_payload_claims_response['message']
+
+    if token_payload_claims_correct is False:
+        LOG.warning(_verify_token_payload_claims_message)
+        response_data['code'] = _verify_token_payload_claims_response['code']
+        response_data['message'] = _verify_token_payload_claims_message
         return response_data
 
-    LOG.debug(check_token_use_correct_message)
+    LOG.debug(_verify_token_payload_claims_message)
     # endregion
 
-    # region 5. Deserialize token header
+    # region 4. Deserialize token header
     _base64_encoded_token_header = token_sections_by_name['header']
     _deserialize_token_header_response = _deserialize_base64_encoded_token_section(
         _base64_encoded_token_header,
@@ -101,7 +96,7 @@ def do(jwt_access_token: str) -> dict:
     LOG.debug(deserialize_token_header_message)
     # endregion
 
-    # region 6(a). Get kid from token header data
+    # region 5(a). Get kid from token header data
     _get_kid_resp = data_ops.extract_attr_from_dictionary(
         token_header_data,
         'token header data',
@@ -117,7 +112,7 @@ def do(jwt_access_token: str) -> dict:
         return response_data
     # endregion
 
-    # region 6(b). Get alg from token header data
+    # region 5(b). Get alg from token header data
     _get_alg_resp = data_ops.extract_attr_from_dictionary(
         token_header_data,
         'token_header_data',
@@ -134,12 +129,14 @@ def do(jwt_access_token: str) -> dict:
 
     # endregion
 
-    # region 7. Fetch well known JWKS for desired AWS Cognito User Pool
-    jwks_data_source_name = 'well known JWKS for desired AWS Cognito User Pool'
+    # TODO: Rather in this step, write the data obtained to a file for later access
+
+    # region 6. Get well known JWKS from token_issuer
+    jwks_data_source_name = 'well known JWKS from token issuer'
 
     request_name_get_jwks = f'Get {jwks_data_source_name}'
 
-    get_jwks_response = get_jwks_json_for_user_pool(request_name_get_jwks)
+    get_jwks_response = fetch_well_known_jwks_from_token_issuer(request_name_get_jwks)
     jwks_data = get_jwks_response['data']
     get_jwks_message = get_jwks_response['message']
 
@@ -199,7 +196,7 @@ def do(jwt_access_token: str) -> dict:
 
     # region Verify token with Public Key and Token Payload
     _verify_jwt_response = verify_jwt_using_public_key(
-        jwt_access_token,
+        token,
         token_payload_data,
         local_key_alg,
         rsa_public_key
@@ -223,6 +220,9 @@ def do(jwt_access_token: str) -> dict:
     response_data['message'] = 'JWT verification successful'
 
     return response_data
+
+
+# region Utils
 
 
 def _deserialize_base64_encoded_token_section(base64_encoded_token_section: str, section_name: str) -> dict:
@@ -275,6 +275,72 @@ def _deserialize_base64_encoded_token_section(base64_encoded_token_section: str,
 
     response_data['data'] = decoded_token_section_data
     response_data['message'] = f'Decoded and deserialized token {section_name}.'
+    return response_data
+
+
+# region Verify token payload claims
+def _verify_token_payload_claims(payload_data: dict, exp_token_use: str, exp_scope: str = None):
+
+    response_data = {
+        'code': None,
+        'status': False,
+        'message': 'default',
+    }
+
+    # region 1. Ensure token is not already expired (using payload data)
+    current_unix_time_seconds = int(time.time())
+
+    _check_token_expired_resp = _check_token_expired(
+        payload_data,
+        current_unix_time_seconds
+    )
+
+    token_expired = _check_token_expired_resp['status']
+    check_token_expired_message = _check_token_expired_resp['message']
+
+    if token_expired is True:
+        response_data['code'] = 'TOKEN_EXPIRED'
+        response_data['message'] = check_token_expired_message
+        return response_data
+
+    LOG.debug(check_token_expired_message)
+    # endregion
+
+    # region 2. Ensure token_use claim matches desired value (using payload data)
+    _check_token_use_correct = _check_token_use_claim_matches_desired_value(
+        payload_data,
+        desired_value=exp_token_use
+    )
+    token_use_correct = _check_token_use_correct['status']
+    check_token_use_correct_message = _check_token_use_correct['message']
+
+    if token_use_correct is False:
+        response_data['code'] = 'INCORRECT_JWT_CLAIM_TOKEN_USE'
+        response_data['message'] = check_token_use_correct_message
+        return response_data
+
+    LOG.debug(check_token_use_correct_message)
+    # endregion
+
+    # region 3. If expected scope given, Ensure scope in token matches the given value
+    if exp_scope is not None:
+        _check_token_scope_correct_response = _check_token_scope_matches_desired_value(
+            payload_data,
+            desired_value=exp_scope
+        )
+        scope_correct = _check_token_scope_correct_response['status']
+        _check_token_scope_correct_message = _check_token_scope_correct_response['message']
+
+        if scope_correct is False:
+            response_data['code'] = 'INCORRECT_JWT_CLAIM_SCOPE'
+            response_data['message'] = _check_token_scope_correct_message
+            return response_data
+        LOG.debug(_check_token_scope_correct_message)
+    # endregion
+
+    response_data['code'] = 'SUCCESS'
+    response_data['status'] = True
+    response_data['message'] = 'Token payload claims verified correct.'
     return response_data
 
 
@@ -365,6 +431,51 @@ def _check_token_use_claim_matches_desired_value(token_payload_data: dict, desir
     response_data['message'] = f'{payload_attr_token_use} value in {data_name} matches "{desired_value}"'
 
     return response_data
+
+
+def _check_token_scope_matches_desired_value(token_payload_data: dict, desired_value: str) -> dict:
+    """
+    Checks whether "scope" claim matches the given "desired_value"
+
+    :param token_payload_data:
+    :param desired_value:
+    :return:
+    """
+
+    response_data = {
+        'status': False,
+        'message': 'default'
+    }
+
+    payload_attr_scope = 'scope'
+    data_name = 'token payload data'
+
+    # region Get "scope" from token payload data
+    _get_scope_resp = data_ops.extract_attr_from_dictionary(
+        data=token_payload_data,
+        data_name=data_name,
+        attr_name=payload_attr_scope,
+        exp_type=str
+    )
+
+    scope_value = _get_scope_resp['value']
+    get_scope_message = _get_scope_resp['text']
+
+    if scope_value is None:
+        response_data['message'] = f'failed token scope check ({get_scope_message})'
+        return response_data
+
+    # endregion
+
+    if scope_value != desired_value:
+        response_data['message'] = f'{payload_attr_scope} value in {data_name} is not "{desired_value}"'
+        return response_data
+
+    response_data['status'] = True
+    response_data['message'] = f'{payload_attr_scope} value in {data_name} matches "{desired_value}"'
+
+    return response_data
+# endregion
 
 
 def verify_jwt_using_public_key(jwt_token: str, decoded_token_payload: dict, algorithm: str, public_key: str):
@@ -580,3 +691,4 @@ def _decode_jwt(token: str, public_key: str, alg: str) -> dict:
     response_data['data'] = response
     response_data['message'] = 'Decoded using JWT and given key and algorithm'
     return response_data
+# endregion

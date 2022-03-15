@@ -2,10 +2,8 @@ import os
 from pprint import pformat
 from dotenv import load_dotenv
 
-import definitions
 
-
-def load_env_vars_from_file():
+def _load_env_vars_from_file():
 
     _test_dir_name = 'test'
 
@@ -33,10 +31,10 @@ def load_env_vars_from_file():
         raise Exception(f'Failed to load environment variables from file:\n{path_to_environment_file}')
 
 
-def test_amazon_cognito_get_jwks_json_for_user_pool() -> None or AssertionError:
+def test_jwt_issuer_get_well_known_jwks() -> None or AssertionError:
     """
 
-    Test Amazon Cognito request: Get jwks json for user pool
+    Test jwt_issuer request: Get well known JWKS
 
     :return:
 
@@ -62,17 +60,16 @@ def test_amazon_cognito_get_jwks_json_for_user_pool() -> None or AssertionError:
     }
     """
 
-    _request_name = 'Get well known JWKS for an AWS Cognito User Pool'
+    _request_name = 'Get well known JWKS'
 
-    _api_name = 'api.amazon_cognito'
+    _api_name = 'jwt_issuer'
 
     api_request_name = f'{_api_name}/{_request_name}'
 
-    from api.amazon_cognito import get_jwks_json_for_user_pool
+    from api.jwt_issuer import fetch_well_known_jwks_from_token_issuer
 
-    response = get_jwks_json_for_user_pool(_request_name)
-    print('Get JWKs JSON for user pool resp is:')
-    print(pformat(response))
+    response = fetch_well_known_jwks_from_token_issuer(_request_name)
+    print(f'Test complete, response is: {pformat(response)}')
 
     if 'code' in response:
         assert response['code'] == 'SUCCESS', f'"code" in response is: {response["code"]} (Expected "SUCCESS")'
@@ -91,5 +88,5 @@ def test_amazon_cognito_get_jwks_json_for_user_pool() -> None or AssertionError:
 
 
 if __name__ == '__main__':
-    load_env_vars_from_file()
-    test_amazon_cognito_get_jwks_json_for_user_pool()
+    _load_env_vars_from_file()
+    test_jwt_issuer_get_well_known_jwks()
