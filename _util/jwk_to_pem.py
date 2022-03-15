@@ -12,7 +12,7 @@ from cryptography.hazmat.primitives.asymmetric.rsa import RSAPublicNumbers
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives import serialization
 
-from util import data_ops
+from _util import data_ops
 
 # TODO: Test against all possible exceptions and handle them...
 
