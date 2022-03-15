@@ -3,7 +3,7 @@ import os
 import requests
 
 import definitions
-from util.logging import get_logger_for_module
+from _util.logger import get_logger_for_module
 
 _LOG_LEVEL = os.getenv('LOG_LEVEL', 'debug')
 LOG = get_logger_for_module(__name__, _LOG_LEVEL)
